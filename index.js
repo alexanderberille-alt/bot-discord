@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const express = require('express');
 require('dotenv').config();
 
@@ -64,9 +64,13 @@ client.on('messageCreate', message => {
   }
 });
 
-// 🤖 Bot prêt
+// 🤖 Bot prêt + statut en ligne
 client.once('ready', () => {
   console.log(`Connecté en tant que ${client.user.tag}`);
+  client.user.setPresence({
+    activities: [{ name: '👋 Bienvenue !', type: ActivityType.Watching }],
+    status: 'online'
+  });
 });
 
 // 🔑 Connexion via variable d'environnement
