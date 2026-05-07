@@ -298,6 +298,11 @@ client.on('messageCreate', async message => {
 
   // ── Session active → analyser si adressé au bot ──
   if (activeSessions[channelId] !== undefined) {
+    // Ignorer si le message mentionne quelqu'un d'autre mais pas le bot
+    if (message.mentions.users.size > 0 && !message.mentions.has(client.user)) {
+      incrementSession(channelId);
+      return;
+    }
     const addressed = await isAddressedToBot(message);
     if (addressed) {
       resetSessionTimer(channelId);
