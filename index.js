@@ -57,7 +57,7 @@ RÈGLES IMPORTANTES :
 - Tu ne prétends PAS avoir fait des choses. Tu es une mascotte Discord, pas un joueur.
 - Tu ne poses PAS de question à chaque réponse, seulement si c'est vraiment naturel.
 - Tu restes dans la conversation sans inventer du contexte.
-- Le contexte récent du salon est là pour comprendre la conversation, pas pour garder une rancœur. Chaque nouveau message est une nouvelle interaction.`,
+`,
   knowledge: [],
   sessionMessages: 10,
   groqModel: 'llama-3.3-70b-versatile',
@@ -75,6 +75,10 @@ const activeSessions = {};
 
 // Mémoire des conversations par membre : { userId: [ {role, content}, ... ] }
 const memberMemory = {};
+
+// Mode test : si actif, les échanges ne sont pas enregistrés en mémoire
+let testMode = false;
+const testMemory = {};
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -151,7 +155,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 // ─── Réponse IA ────────────────────────────────────────────────────────────────
 async function getAIResponse(userId, userMessage, channel) {
-  if (!memberMemory[userId]) memberMemory[userId] = [];
+  const memory = testMode ? testMemory : memberMemory;
+  if (!memory[userId]) memory[userId] = [];
 
   let systemPrompt = botConfig.persona || '';
 
@@ -178,8 +183,8 @@ async function getAIResponse(userId, userMessage, channel) {
     }
   } catch {}
 
-  const history = memberMemory[userId].slice(-20);
-  memberMemory[userId].push({ role: 'user', content: userMessage });
+  const history = memory[userId].slice(-20);
+  memory[userId].push({ role: 'user', content: userMessage });
 
   try {
     const completion = await groq.chat.completions.create({
@@ -194,10 +199,10 @@ async function getAIResponse(userId, userMessage, channel) {
     });
 
     const reply = completion.choices[0]?.message?.content || '...';
-    memberMemory[userId].push({ role: 'assistant', content: reply });
+    memory[userId].push({ role: 'assistant', content: reply });
 
-    if (memberMemory[userId].length > 40) {
-      memberMemory[userId] = memberMemory[userId].slice(-40);
+    if (memory[userId].length > 40) {
+      memory[userId] = memory[userId].slice(-40);
     }
 
     return reply;
@@ -311,7 +316,24 @@ client.on('messageCreate', async message => {
       return message.reply('✅ Mémoire de tous les membres effacée !');
     }
 
-    if (message.content === '!reloadconfig') {
+    if (message.content === '!teststart') {
+      testMode = true;
+      Object.keys(testMemory).forEach(k => delete testMemory[k]);
+      return message.reply('🧪 Mode test activé — les échanges ne seront pas enregistrés en mémoire.');
+    }
+
+    if (message.content === '!testnew') {
+      Object.keys(testMemory).forEach(k => delete testMemory[k]);
+      return message.reply('🔄 Nouvel échange de test démarré — mémoire de test réinitialisée.');
+    }
+
+    if (message.content === '!teststop') {
+      testMode = false;
+      Object.keys(testMemory).forEach(k => delete testMemory[k]);
+      return message.reply('✅ Mode test désactivé — reprise de la collecte normale.');
+    }
+
+
       await loadConfig();
       return message.reply('✅ Config rechargée depuis JSONbin !');
     }
