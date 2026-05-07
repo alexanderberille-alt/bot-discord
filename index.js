@@ -174,7 +174,6 @@ async function isAddressedToBot(message) {
   // Mention directe
   if (message.mentions.has(client.user)) return true;
 
-  // Utiliser Groq pour analyser si le message s'adresse au bot
   try {
     const recent = await message.channel.messages.fetch({ limit: 5 });
     const context = [...recent.values()]
@@ -183,13 +182,13 @@ async function isAddressedToBot(message) {
       .join('\n');
 
     const check = await groq.chat.completions.create({
-      model: 'llama3-8b-8192',
+      model: 'llama-3.3-70b-versatile',
       messages: [
         {
           role: 'system',
-          content: `Tu analyses si un message Discord s'adresse à MascotteOG (un bot). Réponds UNIQUEMENT par "oui" ou "non".
+          content: `Tu analyses si un message Discord s'adresse à MascotteOG (un bot Discord). Réponds UNIQUEMENT par "oui" ou "non", rien d'autre.
 Un message s'adresse au bot si : il lui pose une question directement, lui répond, ou s'adresse clairement à elle.
-Un message ne s'adresse PAS au bot si : les membres conversent entre eux, parlent d'autre chose.`
+Un message ne s'adresse PAS au bot si : les membres conversent entre eux sans impliquer le bot.`
         },
         {
           role: 'user',
@@ -201,8 +200,10 @@ Un message ne s'adresse PAS au bot si : les membres conversent entre eux, parlen
     });
 
     const answer = check.choices[0]?.message?.content?.toLowerCase().trim();
+    console.log(`🔍 Analyse message "${message.content}" → ${answer}`);
     return answer === 'oui';
-  } catch {
+  } catch (e) {
+    console.error('Erreur détection:', e.message);
     return false;
   }
 }
