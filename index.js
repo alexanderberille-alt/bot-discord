@@ -16,6 +16,7 @@ const RULES_MESSAGE_ID   = '1495184791342022717';
 const RULES_EMOJI        = '✅';
 const JSONBIN_API_KEY    = process.env.JSONBIN_API_KEY;
 const BIN_ID             = process.env.BIN_ID;
+const PROFILES_BIN_ID   = process.env.PROFILES_BIN_ID; // BIN séparé pour les profils membres
 
 // ─── Réponses aléatoires aux mentions sans message ────────────────────────────
 const MENTION_REPLIES = [
@@ -64,19 +65,27 @@ RÈGLES IMPORTANTES :
   serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.'
 };
 
+// ─── Profils membres ───────────────────────────────────────────────────────────
+// Structure : { userId: { username, friendshipLevel, incidents: [], vocabulary: { words: {}, lastUpdated } } }
+let memberProfiles = {};
+
+// ─── Vocabulaire global du serveur ────────────────────────────────────────────
+// Structure : { word: count }
+let serverVocabulary = {};
+
 // Membres ayant déjà reçu le message de bienvenue
 const welcomedMembers = new Set();
 
-// Anti-doublon : IDs des messages déjà traités
+// Anti-doublon
 const processedMessages = new Set();
 
-// Sessions actives par salon : { channelId: { count: number } }
+// Sessions actives par salon
 const activeSessions = {};
 
-// Mémoire des conversations par membre : { userId: [ {role, content}, ... ] }
+// Mémoire des conversations par membre
 const memberMemory = {};
 
-// Mode test : si actif, les échanges ne sont pas enregistrés en mémoire
+// Mode test
 let testMode = false;
 const testMemory = {};
 
@@ -99,59 +108,168 @@ async function loadConfig() {
   }
 }
 
-// Recharger la config toutes les 5 minutes
-setInterval(loadConfig, 5 * 60 * 1000);
-
-// ─── Client Discord ────────────────────────────────────────────────────────────
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.MessageContent,
-  ],
-  partials: [Partials.Message, Partials.Reaction, Partials.User]
-});
-
-// ─── Bot prêt ──────────────────────────────────────────────────────────────────
-client.once('ready', async () => {
-  console.log(`Connecté en tant que ${client.user.tag}`);
-  await loadConfig();
-  client.user.setPresence({
-    activities: [{ name: '🐉 HDR — Mineshoku Tensei', type: ActivityType.Watching }],
-    status: 'online'
-  });
-});
-
-// ─── Réaction au règlement → message de bienvenue ──────────────────────────────
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.bot) return;
-
-  if (reaction.partial) {
-    try { await reaction.fetch(); } catch { return; }
-  }
-
-  if (
-    reaction.message.id === RULES_MESSAGE_ID &&
-    reaction.emoji.name === RULES_EMOJI &&
-    !welcomedMembers.has(user.id)
-  ) {
-    welcomedMembers.add(user.id);
-
-    const guild = reaction.message.guild;
-    if (!guild) return;
-
-    const channelId = guild.channels.cache.has(HDR_WELCOME_CH)
-      ? HDR_WELCOME_CH
-      : TEST_WELCOME_CH;
-
-    const channel = guild.channels.cache.get(channelId);
-    if (channel) {
-      channel.send(`Salut <@${user.id}>, bienvenu dans la guilde ! 🐉`);
+// ─── Charger profils membres depuis JSONbin ────────────────────────────────────
+async function loadProfiles() {
+  if (!JSONBIN_API_KEY || !PROFILES_BIN_ID) return;
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${PROFILES_BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    const data = await res.json();
+    if (data.record) {
+      memberProfiles = data.record.memberProfiles || {};
+      serverVocabulary = data.record.serverVocabulary || {};
+      console.log('✅ Profils membres chargés depuis JSONbin');
     }
+  } catch (e) {
+    console.error('⚠️ Erreur chargement profils JSONbin:', e.message);
   }
-});
+}
+
+// ─── Sauvegarder profils membres dans JSONbin ──────────────────────────────────
+async function saveProfiles() {
+  if (!JSONBIN_API_KEY || !PROFILES_BIN_ID) return;
+  try {
+    await fetch(`https://api.jsonbin.io/v3/b/${PROFILES_BIN_ID}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_API_KEY
+      },
+      body: JSON.stringify({ memberProfiles, serverVocabulary })
+    });
+  } catch (e) {
+    console.error('⚠️ Erreur sauvegarde profils JSONbin:', e.message);
+  }
+}
+
+// Recharger config toutes les 5 minutes
+setInterval(loadConfig, 5 * 60 * 1000);
+// Sauvegarder profils toutes les 10 minutes
+setInterval(saveProfiles, 10 * 60 * 1000);
+
+// ─── Gestion des profils membres ──────────────────────────────────────────────
+function getOrCreateProfile(userId, username) {
+  if (!memberProfiles[userId]) {
+    memberProfiles[userId] = {
+      username: username || 'Inconnu',
+      friendshipLevel: 0, // -5 à 20
+      incidents: [],
+      vocabulary: {}
+    };
+  }
+  if (username) memberProfiles[userId].username = username;
+  return memberProfiles[userId];
+}
+
+// Ajuster le niveau d'amitié
+function adjustFriendship(userId, delta) {
+  const profile = memberProfiles[userId];
+  if (!profile) return;
+  profile.friendshipLevel = Math.max(-5, Math.min(20, profile.friendshipLevel + delta));
+}
+
+// Ajouter un incident
+function addIncident(userId, description) {
+  const profile = memberProfiles[userId];
+  if (!profile) return;
+  profile.incidents.push({
+    date: new Date().toISOString(),
+    description
+  });
+  // Limiter à 20 incidents max
+  if (profile.incidents.length > 20) {
+    profile.incidents = profile.incidents.slice(-20);
+  }
+}
+
+// ─── Analyse vocabulaire ───────────────────────────────────────────────────────
+function analyzeVocabulary(userId, text) {
+  // Mots à ignorer (stop words)
+  const stopWords = new Set([
+    'le','la','les','un','une','des','de','du','et','en','au','aux',
+    'je','tu','il','elle','on','nous','vous','ils','elles','me','te','se',
+    'que','qui','quoi','dont','où','ce','cette','ces','mon','ton','son',
+    'ma','ta','sa','nos','vos','leurs','lui','leur','y','ne','pas','plus',
+    'est','sont','a','ont','être','avoir','je','c','j','l','d','s','n','m',
+    'si','mais','ou','donc','or','ni','car','pour','sur','sous','dans',
+    'avec','sans','par','entre','vers','chez','the','is','it','in','on','at',
+    'to','a','an','that','this','i','you','he','she','we','they'
+  ]);
+
+  const words = text.toLowerCase()
+    .replace(/[^a-zàâäéèêëîïôùûüç0-9\s']/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !stopWords.has(w));
+
+  const profile = getOrCreateProfile(userId);
+
+  words.forEach(word => {
+    // Vocabulaire du membre
+    profile.vocabulary[word] = (profile.vocabulary[word] || 0) + 1;
+    // Vocabulaire global serveur
+    serverVocabulary[word] = (serverVocabulary[word] || 0) + 1;
+  });
+
+  // Nettoyer vocabulaire du membre (garder top 100)
+  const memberEntries = Object.entries(profile.vocabulary).sort((a, b) => b[1] - a[1]);
+  if (memberEntries.length > 100) {
+    profile.vocabulary = Object.fromEntries(memberEntries.slice(0, 100));
+  }
+
+  // Nettoyer vocabulaire global (garder top 200)
+  const serverEntries = Object.entries(serverVocabulary).sort((a, b) => b[1] - a[1]);
+  if (serverEntries.length > 200) {
+    serverVocabulary = Object.fromEntries(serverEntries.slice(0, 200));
+  }
+}
+
+// Obtenir le top N mots d'un objet vocabulaire
+function getTopWords(vocab, n = 10) {
+  return Object.entries(vocab)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([word]) => word);
+}
+
+// ─── Construire le contexte de personnalité pour un membre ────────────────────
+function buildPersonalityContext(userId) {
+  const profile = memberProfiles[userId];
+  if (!profile) return '';
+
+  let ctx = '\n\n--- Relation avec ce membre ---\n';
+
+  // Niveau d'amitié
+  const level = profile.friendshipLevel;
+  if (level <= -3) {
+    ctx += `Tu as eu des problèmes avec ce membre (niveau ${level}/20). Sois méfiante et distante, tu ne lui fais pas vraiment confiance.\n`;
+  } else if (level <= 0) {
+    ctx += `Tu ne connais pas vraiment ce membre encore (niveau ${level}/20). Sois neutre et observe.\n`;
+  } else if (level <= 5) {
+    ctx += `Ce membre est un peu connu (niveau ${level}/20). Tu es naturelle avec lui.\n`;
+  } else if (level <= 12) {
+    ctx += `Ce membre est un membre sympa que tu apprécies (niveau ${level}/20). Tu es un peu plus détendue et taquine avec lui.\n`;
+  } else if (level <= 17) {
+    ctx += `Ce membre est un bon ami (niveau ${level}/20). Tu es chaleureuse, tu peux le chambrer affectueusement.\n`;
+  } else {
+    ctx += `Ce membre est un de tes meilleurs amis sur le serveur (niveau ${level}/20). Tu es très proche, très naturelle, tu te lâches plus.\n`;
+  }
+
+  // Vocabulaire spécifique du membre (top 8)
+  const memberWords = getTopWords(profile.vocabulary, 8);
+  if (memberWords.length > 0) {
+    ctx += `Ce membre utilise souvent ces mots/expressions : ${memberWords.join(', ')}. Intègre-les très subtilement et naturellement dans ta façon de lui parler.\n`;
+  }
+
+  return ctx;
+}
+
+// ─── Construire le contexte vocabulaire global ────────────────────────────────
+function buildVocabularyContext() {
+  const topWords = getTopWords(serverVocabulary, 15);
+  if (topWords.length === 0) return '';
+  return `\n\n--- Vocabulaire courant du serveur ---\nCes mots/expressions sont souvent utilisés sur le serveur : ${topWords.join(', ')}. Intègre-les naturellement quand c'est pertinent.\n`;
+}
 
 // ─── Réponse IA ────────────────────────────────────────────────────────────────
 async function getAIResponse(userId, userMessage, channel) {
@@ -168,6 +286,12 @@ async function getAIResponse(userId, userMessage, channel) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
   }
 
+  // Contexte personnalité basé sur le profil du membre (hors mode test)
+  if (!testMode) {
+    systemPrompt += buildPersonalityContext(userId);
+    systemPrompt += buildVocabularyContext();
+  }
+
   // Contexte récent du salon
   try {
     if (channel && channel.messages) {
@@ -178,7 +302,7 @@ async function getAIResponse(userId, userMessage, channel) {
         .map(m => `${m.author.username}: ${m.content}`)
         .join('\n');
       if (channelContext) {
-        systemPrompt += `\n\n--- Contexte récent du salon ---\n${channelContext}`;
+        systemPrompt += `\n\n--- Contexte récent du salon (pour comprendre la conv, pas pour garder une rancœur) ---\n${channelContext}`;
       }
     }
   } catch {}
@@ -205,11 +329,45 @@ async function getAIResponse(userId, userMessage, channel) {
       memory[userId] = memory[userId].slice(-40);
     }
 
+    // Détecter agressivité pour ajuster l'amitié (hors mode test)
+    if (!testMode) {
+      detectAndUpdateRelation(userId, userMessage);
+    }
+
     return reply;
   } catch (e) {
     console.error('Erreur Groq:', e.message);
     return 'bug, réessaie';
   }
+}
+
+// ─── Détecter agressivité / positivité et mettre à jour la relation ───────────
+async function detectAndUpdateRelation(userId, message) {
+  try {
+    const check = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: `Analyse ce message Discord. Réponds UNIQUEMENT avec un JSON : {"sentiment": "agressif"|"positif"|"neutre", "incident": null|"description courte de l'incident si agressif"}`
+        },
+        { role: 'user', content: message }
+      ],
+      max_tokens: 60,
+      temperature: 0.1
+    });
+
+    const raw = check.choices[0]?.message?.content || '{}';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const result = JSON.parse(clean);
+
+    if (result.sentiment === 'agressif') {
+      adjustFriendship(userId, -1);
+      if (result.incident) addIncident(userId, result.incident);
+    } else if (result.sentiment === 'positif') {
+      adjustFriendship(userId, 0.5);
+    }
+  } catch {}
 }
 
 // ─── Détecter si un message s'adresse au bot ──────────────────────────────────
@@ -272,6 +430,58 @@ function incrementSession(channelId) {
   }
 }
 
+// ─── Client Discord ────────────────────────────────────────────────────────────
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Message, Partials.Reaction, Partials.User]
+});
+
+// ─── Bot prêt ──────────────────────────────────────────────────────────────────
+client.once('ready', async () => {
+  console.log(`Connecté en tant que ${client.user.tag}`);
+  await loadConfig();
+  await loadProfiles();
+  client.user.setPresence({
+    activities: [{ name: '🐉 HDR — Mineshoku Tensei', type: ActivityType.Watching }],
+    status: 'online'
+  });
+});
+
+// ─── Réaction au règlement → message de bienvenue ──────────────────────────────
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
+
+  if (reaction.partial) {
+    try { await reaction.fetch(); } catch { return; }
+  }
+
+  if (
+    reaction.message.id === RULES_MESSAGE_ID &&
+    reaction.emoji.name === RULES_EMOJI &&
+    !welcomedMembers.has(user.id)
+  ) {
+    welcomedMembers.add(user.id);
+
+    const guild = reaction.message.guild;
+    if (!guild) return;
+
+    const channelId = guild.channels.cache.has(HDR_WELCOME_CH)
+      ? HDR_WELCOME_CH
+      : TEST_WELCOME_CH;
+
+    const channel = guild.channels.cache.get(channelId);
+    if (channel) {
+      channel.send(`Salut <@${user.id}>, bienvenu dans la guilde ! 🐉`);
+    }
+  }
+});
+
 // ─── Messages ──────────────────────────────────────────────────────────────────
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
@@ -283,6 +493,17 @@ client.on('messageCreate', async message => {
 
   const channelId = message.channel.id;
   const isMentioned = message.mentions.has(client.user);
+  const userId = message.author.id;
+  const username = message.author.username;
+
+  // Créer/mettre à jour le profil du membre (hors mode test)
+  if (!testMode) {
+    getOrCreateProfile(userId, username);
+    // Analyser le vocabulaire de chaque message
+    if (message.content && message.content.length > 2) {
+      analyzeVocabulary(userId, message.content);
+    }
+  }
 
   // ── Commandes admin (owner seulement) ──
   if (message.author.id === OWNER_ID) {
@@ -293,7 +514,12 @@ client.on('messageCreate', async message => {
         '`!voirpersona` — voir la personnalité actuelle\n' +
         '`!reset` — remettre la perso par défaut\n' +
         '`!memoire` — effacer la mémoire de tous\n' +
-        '`!reloadconfig` — recharger la config depuis JSONbin'
+        '`!reloadconfig` — recharger la config depuis JSONbin\n' +
+        '`!teststart` — activer le mode test\n' +
+        '`!testnew` — reset l\'échange de test\n' +
+        '`!teststop` — désactiver le mode test\n' +
+        '`!saveprofiles` — sauvegarder les profils manuellement\n' +
+        '`!profil @membre` — voir le profil d\'un membre'
       );
     }
 
@@ -333,14 +559,33 @@ client.on('messageCreate', async message => {
       return message.reply('✅ Mode test désactivé — reprise de la collecte normale.');
     }
 
-
     if (message.content === '!reloadconfig') {
       await loadConfig();
       return message.reply('✅ Config rechargée depuis JSONbin !');
     }
 
+    if (message.content === '!saveprofiles') {
+      await saveProfiles();
+      return message.reply('✅ Profils membres sauvegardés !');
+    }
+
     if (message.content === '!test') {
       return message.reply('✅ Le bot fonctionne correctement !');
+    }
+
+    // Voir le profil d'un membre
+    if (message.content.startsWith('!profil ')) {
+      const mentionedUser = message.mentions.users.first();
+      if (!mentionedUser) return message.reply('Mentionne un membre avec @');
+      const profile = memberProfiles[mentionedUser.id];
+      if (!profile) return message.reply('Aucun profil pour ce membre.');
+      const topWords = getTopWords(profile.vocabulary, 10);
+      return message.reply(
+        `**Profil de ${profile.username}**\n` +
+        `Amitié : ${profile.friendshipLevel}/20\n` +
+        `Incidents : ${profile.incidents.length}\n` +
+        `Top mots : ${topWords.join(', ') || 'aucun'}`
+      );
     }
   }
 
@@ -349,7 +594,7 @@ client.on('messageCreate', async message => {
     startSession(channelId);
     const userMsg = message.content.replace(/<@!?\d+>/g, '').trim();
     if (!userMsg) return message.reply(randomMentionReply());
-    const reply = await getAIResponse(message.author.id, userMsg, message.channel);
+    const reply = await getAIResponse(userId, userMsg, message.channel);
     return message.reply(reply);
   }
 
@@ -362,7 +607,7 @@ client.on('messageCreate', async message => {
     const addressed = await isAddressedToBot(message);
     if (addressed) {
       resetSessionTimer(channelId);
-      const reply = await getAIResponse(message.author.id, message.content, message.channel);
+      const reply = await getAIResponse(userId, message.content, message.channel);
       return message.reply(reply);
     } else {
       incrementSession(channelId);
