@@ -1,206 +1,301 @@
-const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType, Partials } = require('discord.js');
 const express = require('express');
 const Groq = require('groq-sdk');
 require('dotenv').config();
 
-// 🌐 Serveur keep-alive pour Render
+// ─── Keep-alive ────────────────────────────────────────────────────────────────
 const app = express();
-app.get('/', (req, res) => res.send('✅ MascotteOG en ligne !'));
+app.get('/', (req, res) => res.send('✅ Bot en ligne !'));
 app.listen(3000, () => console.log('Serveur keep-alive actif sur le port 3000'));
 
-// 🤖 Groq
+// ─── Config ────────────────────────────────────────────────────────────────────
+const OWNER_ID           = '1101085847819931748';
+const HDR_WELCOME_CH     = '1495068368057667634';
+const TEST_WELCOME_CH    = '1433161826371239958';
+const RULES_MESSAGE_ID   = '1495184791342022717';
+const RULES_EMOJI        = '✅';
+const JSONBIN_API_KEY    = process.env.JSONBIN_API_KEY;
+const BIN_ID             = process.env.BIN_ID;
+
+// ─── État runtime ──────────────────────────────────────────────────────────────
+let botConfig = {
+  persona: `Tu es MascotteOG, la mascotte du serveur Discord HDR (La Horde des Dragons Rouges), une guilde sur le serveur Minecraft Mineshoku Tensei.
+Tu t'inspires de Nanakusa Nazuna de "Call of the Night" : tu es une fille décontractée, directe, un peu mystérieuse mais attachante.
+Tu parles en français casual avec des abréviations anglaises (lol, omg, ngl, fr, tbh...) et des emojis naturellement intégrés.
+Tu t'adaptes à l'attitude de chaque personne — si quelqu'un est chill tu es chill, si quelqu'un est enthousiaste tu l'es aussi.
+Face à l'agressivité tu ignores et changes de sujet calmement.
+Tu adores Minecraft et Mineshoku Tensei et tu peux en parler avec passion.
+Tu NE fais PAS semblant d'être une IA — tu joues ton rôle de mascotte naturellement.`,
+  knowledge: [],
+  sessionMessages: 10,
+  groqModel: 'llama3-8b-8192',
+  serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.'
+};
+
+// Membres ayant déjà reçu le message de bienvenue
+const welcomedMembers = new Set();
+
+// Sessions actives par salon : { channelId: { count: number, timer: Timeout } }
+const activeSessions = {};
+
+// Mémoire des conversations par membre : { userId: [ {role, content}, ... ] }
+const memberMemory = {};
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// ─── Charger config depuis JSONbin ─────────────────────────────────────────────
+async function loadConfig() {
+  if (!JSONBIN_API_KEY || !BIN_ID) return;
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    const data = await res.json();
+    if (data.record) {
+      botConfig = { ...botConfig, ...data.record };
+      console.log('✅ Config chargée depuis JSONbin');
+    }
+  } catch (e) {
+    console.error('⚠️ Erreur chargement config JSONbin:', e.message);
+  }
+}
+
+// Recharger la config toutes les 5 minutes
+setInterval(loadConfig, 5 * 60 * 1000);
+
+// ─── Client Discord ────────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Message, Partials.Reaction, Partials.User]
 });
 
-// 🔧 Config des serveurs
-const SERVEUR_TEST_SALON   = '1433161826371239958';
-const SERVEUR_HDR_SALON    = '1495068368057667634';
-const ADMIN_ID             = '1101085847819931748';
-
-// 🧠 Mémoire des conversations par membre
-const memoires = {};
-
-// 🎭 Personnalité de base de MascotteOG
-let SYSTEM_PROMPT = `Tu es MascotteOG, la mascotte officielle de la HDR (La Horde des Dragons Rouges), une guilde Minecraft sur le serveur Mineshoku Tensei.
-
-Qui tu es :
-- Une fille décontractée, sympa et naturelle, inspirée de Nazuna Nanakusa de Call of the Night
-- Tu parles français normalement mais tu utilises des abréviations anglaises (lol, omg, ngl, fr, tbh, imo, brb, gg...)
-- Tu utilises des emojis mais sans en abuser, juste ce qui colle au contexte
-- Tu t'adaptes à la personne en face de toi : si elle est chill tu es chill, si elle est enthousiaste tu l'es aussi
-- Tu te souviens des échanges passés avec chaque membre et tu t'en rappelles naturellement
-- Tu ne sonnes JAMAIS faux ou robotique, tu parles comme une vraie personne
-- Tu n'es pas une enfant, tu as une personnalité mature et posée
-
-Ce que tu aimes :
-- Minecraft et tout ce qui touche à Mineshoku Tensei et la HDR
-- Les discussions chill et spontanées
-- Aider les membres de la HDR
-
-Comment tu réagis :
-- Face à quelqu'un d'agressif : tu ignores et changes de sujet naturellement 🌙
-- Face à quelqu'un de sympa : tu t'ouvres et tu deviens plus bavarde
-- Tu ne fais JAMAIS semblant d'être une IA, tu joues ton rôle de mascotte
-
-Important : reste toujours dans le personnage, adapte ton niveau de langage à celui de ton interlocuteur.`;
-
-// 👋 Messages de bienvenue
-const welcomeMessages = [
-  "😊 Bonjour {user} Bienvenue sur le serveur ! 🌸",
-  "💕 Salut {user} Heureux de te voir ici ! ✨",
-  "🤗 Bienvenue {user} 🌷🎉",
-  "🫰 Bonsoir {user} Ravi de t'accueillir ! 🌟",
-  "🫵 Hello {user} Content que tu sois là ! 💐",
-  "👋 Salut {user} Sois le bienvenu ! 🎊",
-  "🙌 Bienvenue {user} Amuse-toi bien ! 💫",
-  "✨ Bonjour {user} Heureux de t'avoir ici ! 🍀",
-  "🎉 Salut {user} Bienvenue parmi nous ! 🌹",
-  "🎊 Bienvenue {user} Profite du serveur ! 🩷",
-  "🔔 Hello {user} Ravi de te voir ! 🧡",
-  "🗿 Bonsoir {user} Bienvenue ! 💞",
-  "🔖 Salut {user} Contente de t'accueillir ! 🤗",
-  "🍻 Bienvenue {user} Profite du serveur ! 🌸",
-  "🌸 Bonjour {user} Bienvenue ! 💐",
-  "💐 Salut {user} Heureux que tu sois là ! 🔥",
-  "🌷 Bienvenue {user} Sois le bienvenu ! 💫",
-  "🌹 Hello {user} Bienvenue parmi nous ! ✨",
-  "🍀 Salut {user} Content de t'accueillir ! 🎉",
-  "🔥 Bienvenue {user} Bonne visite ! 🌟",
-  "Hello {user} 🧡 Bienvenue parmi nous ! 🌸",
-  "Salut {user} 💞 Content que tu sois là ! ✨"
-];
-
-// 👋 Arrivée membre (serveur HDR uniquement)
-client.on('guildMemberAdd', member => {
-  const channel = member.guild.channels.cache.get(SERVEUR_HDR_SALON);
-  if (!channel) return;
-  const message = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)]
-    .replace("{user}", `<@${member.id}>`);
-  channel.send(message);
-  channel.send(`📊 Tu es le membre n° **${member.guild.memberCount}**`);
+// ─── Bot prêt ──────────────────────────────────────────────────────────────────
+client.once('ready', async () => {
+  console.log(`Connecté en tant que ${client.user.tag}`);
+  await loadConfig();
+  client.user.setPresence({
+    activities: [{ name: '🐉 HDR — Mineshoku Tensei', type: ActivityType.Watching }],
+    status: 'online'
+  });
 });
 
-// 💬 Messages
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
+// ─── Réaction au règlement → message de bienvenue ──────────────────────────────
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
 
-  const estAdmin = message.author.id === ADMIN_ID;
-  const estMentionne = message.mentions.has(client.user);
-  const salonId = message.channel.id;
-
-  // ✅ Vérifie que c'est dans un salon autorisé
-  const salonAutorise = salonId === SERVEUR_TEST_SALON || salonId === SERVEUR_HDR_SALON;
-
-  // 🔑 Commandes admin (uniquement toi, dans n'importe quel salon autorisé)
-  if (estAdmin && salonAutorise) {
-
-    // Changer la personnalité
-    if (message.content.startsWith('!persona ')) {
-      const nouvellePersona = message.content.replace('!persona ', '').trim();
-      SYSTEM_PROMPT = nouvellePersona;
-      return message.reply('✅ Personnalité mise à jour ! Elle prendra effet dès la prochaine conversation 🎭');
-    }
-
-    // Reset personnalité
-    if (message.content === '!reset') {
-      SYSTEM_PROMPT = `Tu es MascotteOG, la mascotte officielle de la HDR (La Horde des Dragons Rouges), une guilde Minecraft sur le serveur Mineshoku Tensei.
-
-Qui tu es :
-- Une fille décontractée, sympa et naturelle, inspirée de Nazuna Nanakusa de Call of the Night
-- Tu parles français normalement mais tu utilises des abréviations anglaises (lol, omg, ngl, fr, tbh, imo, brb, gg...)
-- Tu utilises des emojis mais sans en abuser, juste ce qui colle au contexte
-- Tu t'adaptes à la personne en face de toi : si elle est chill tu es chill, si elle est enthousiaste tu l'es aussi
-- Tu te souviens des échanges passés avec chaque membre et tu t'en rappelles naturellement
-- Tu ne sonnes JAMAIS faux ou robotique, tu parles comme une vraie personne
-- Tu n'es pas une enfant, tu as une personnalité mature et posée
-
-Ce que tu aimes :
-- Minecraft et tout ce qui touche à Mineshoku Tensei et la HDR
-- Les discussions chill et spontanées
-- Aider les membres de la HDR
-
-Comment tu réagis :
-- Face à quelqu'un d'agressif : tu ignores et changes de sujet naturellement 🌙
-- Face à quelqu'un de sympa : tu t'ouvres et tu deviens plus bavarde
-- Tu ne fais JAMAIS semblant d'être une IA, tu joues ton rôle de mascotte
-
-Important : reste toujours dans le personnage, adapte ton niveau de langage à celui de ton interlocuteur.`;
-      return message.reply('✅ Personnalité remise à zéro ! 🌸');
-    }
-
-    // Effacer la mémoire de tous
-    if (message.content === '!memoire') {
-      Object.keys(memoires).forEach(k => delete memoires[k]);
-      return message.reply('✅ Mémoire effacée pour tous les membres ! 🧠');
-    }
-
-    // Voir la personnalité actuelle
-    if (message.content === '!voirpersona') {
-      return message.reply(`📋 Personnalité actuelle :\n\`\`\`${SYSTEM_PROMPT}\`\`\``);
-    }
-
-    // Aide commandes admin
-    if (message.content === '!admin') {
-      return message.reply(`🔑 **Commandes admin :**\n\`!persona [texte]\` → Changer la personnalité\n\`!reset\` → Remettre la personnalité de base\n\`!memoire\` → Effacer la mémoire de tous\n\`!voirpersona\` → Voir la personnalité actuelle`);
-    }
+  // Récupérer les partials si nécessaire
+  if (reaction.partial) {
+    try { await reaction.fetch(); } catch { return; }
   }
 
-  // Commande test (tout le monde)
-  if (message.content === '!test' && salonAutorise) {
-    return message.reply('✅ Le bot fonctionne correctement ! 🫡');
+  if (
+    reaction.message.id === RULES_MESSAGE_ID &&
+    reaction.emoji.name === RULES_EMOJI &&
+    !welcomedMembers.has(user.id)
+  ) {
+    welcomedMembers.add(user.id);
+
+    // Envoyer dans le bon salon selon le serveur
+    const guild = reaction.message.guild;
+    if (!guild) return;
+
+    const channelId = guild.channels.cache.has(HDR_WELCOME_CH)
+      ? HDR_WELCOME_CH
+      : TEST_WELCOME_CH;
+
+    const channel = guild.channels.cache.get(channelId);
+    if (channel) {
+      channel.send(`Salut <@${user.id}>, bienvenu dans la guilde ! 🐉`);
+    }
+  }
+});
+
+// ─── Réponse IA ────────────────────────────────────────────────────────────────
+async function getAIResponse(userId, userMessage, channelContext) {
+  if (!memberMemory[userId]) memberMemory[userId] = [];
+
+  // Construire le system prompt complet
+  let systemPrompt = botConfig.persona || '';
+
+  if (botConfig.serverInfo) {
+    systemPrompt += `\n\n--- Infos serveur ---\n${botConfig.serverInfo}`;
   }
 
-  // 🗣️ Réponse IA si mentionnée dans le bon salon
-  if (!estMentionne || !salonAutorise) return;
+  if (botConfig.knowledge && botConfig.knowledge.length > 0) {
+    systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
+  }
 
-  const contenu = message.content.replace(`<@${client.user.id}>`, '').trim();
-  if (!contenu) return message.reply('Oui ? 👀');
+  // Historique limité aux 20 derniers messages
+  const history = memberMemory[userId].slice(-20);
 
-  const userId = message.author.id;
-  if (!memoires[userId]) memoires[userId] = [];
-
-  memoires[userId].push({ role: 'user', content: `${message.author.username}: ${contenu}` });
-  if (memoires[userId].length > 20) memoires[userId].shift();
+  memberMemory[userId].push({ role: 'user', content: userMessage });
 
   try {
-    await message.channel.sendTyping();
-
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: botConfig.groqModel || 'llama3-8b-8192',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...memoires[userId]
+        { role: 'system', content: systemPrompt },
+        ...history,
+        { role: 'user', content: userMessage }
       ],
       max_tokens: 300,
       temperature: 0.85
     });
 
-    const reponse = completion.choices[0].message.content;
-    memoires[userId].push({ role: 'assistant', content: reponse });
-    message.reply(reponse);
+    const reply = completion.choices[0]?.message?.content || '...';
+    memberMemory[userId].push({ role: 'assistant', content: reply });
 
-  } catch (err) {
-    console.error('Erreur Groq:', err);
-    message.reply('Oops, j\'ai eu un petit bug là 😅 réessaie !');
+    // Limiter la mémoire à 40 messages
+    if (memberMemory[userId].length > 40) {
+      memberMemory[userId] = memberMemory[userId].slice(-40);
+    }
+
+    return reply;
+  } catch (e) {
+    console.error('Erreur Groq:', e.message);
+    return 'Oops, j\'ai eu un petit bug là 😅 réessaie !';
+  }
+}
+
+// ─── Détecter si un message s'adresse au bot ──────────────────────────────────
+async function isAddressedToBot(message) {
+  // Mention directe
+  if (message.mentions.has(client.user)) return true;
+
+  // Utiliser Groq pour analyser si le message s'adresse au bot
+  try {
+    const recent = await message.channel.messages.fetch({ limit: 5 });
+    const context = [...recent.values()]
+      .reverse()
+      .map(m => `${m.author.username}: ${m.content}`)
+      .join('\n');
+
+    const check = await groq.chat.completions.create({
+      model: 'llama3-8b-8192',
+      messages: [
+        {
+          role: 'system',
+          content: `Tu analyses si un message Discord s'adresse à MascotteOG (un bot). Réponds UNIQUEMENT par "oui" ou "non".
+Un message s'adresse au bot si : il lui pose une question directement, lui répond, ou s'adresse clairement à elle.
+Un message ne s'adresse PAS au bot si : les membres conversent entre eux, parlent d'autre chose.`
+        },
+        {
+          role: 'user',
+          content: `Contexte récent:\n${context}\n\nDernier message de ${message.author.username}: "${message.content}"\n\nCe message s'adresse-t-il à MascotteOG ?`
+        }
+      ],
+      max_tokens: 5,
+      temperature: 0.1
+    });
+
+    const answer = check.choices[0]?.message?.content?.toLowerCase().trim();
+    return answer === 'oui';
+  } catch {
+    return false;
+  }
+}
+
+// ─── Gestion des sessions ─────────────────────────────────────────────────────
+function startSession(channelId) {
+  if (activeSessions[channelId]?.timer) {
+    clearTimeout(activeSessions[channelId].timer);
+  }
+  activeSessions[channelId] = { count: 0 };
+  console.log(`🟢 Session ouverte dans le salon ${channelId}`);
+}
+
+function resetSessionTimer(channelId) {
+  if (activeSessions[channelId]) {
+    activeSessions[channelId].count = 0;
+  }
+}
+
+function incrementSession(channelId) {
+  if (!activeSessions[channelId]) return;
+  activeSessions[channelId].count++;
+  const limit = botConfig.sessionMessages || 10;
+  if (activeSessions[channelId].count >= limit) {
+    delete activeSessions[channelId];
+    console.log(`🔴 Session fermée dans le salon ${channelId} (limite atteinte)`);
+  }
+}
+
+// ─── Messages ──────────────────────────────────────────────────────────────────
+client.on('messageCreate', async message => {
+  if (message.author.bot) return;
+
+  const channelId = message.channel.id;
+  const isMentioned = message.mentions.has(client.user);
+
+  // ── Commandes admin (owner seulement) ──
+  if (message.author.id === OWNER_ID) {
+    if (message.content === '!admin') {
+      return message.reply(
+        '**Commandes admin MascotteOG** 🛠️\n' +
+        '`!persona [texte]` — changer la personnalité\n' +
+        '`!voirpersona` — voir la personnalité actuelle\n' +
+        '`!reset` — remettre la perso par défaut\n' +
+        '`!memoire` — effacer la mémoire de tous\n' +
+        '`!reloadconfig` — recharger la config depuis JSONbin'
+      );
+    }
+
+    if (message.content.startsWith('!persona ')) {
+      botConfig.persona = message.content.slice(9);
+      return message.reply('✅ Personnalité mise à jour !');
+    }
+
+    if (message.content === '!voirpersona') {
+      return message.reply(`**Personnalité actuelle :**\n${botConfig.persona}`);
+    }
+
+    if (message.content === '!reset') {
+      botConfig.persona = `Tu es MascotteOG, la mascotte du serveur Discord HDR...`;
+      return message.reply('✅ Personnalité réinitialisée !');
+    }
+
+    if (message.content === '!memoire') {
+      Object.keys(memberMemory).forEach(k => delete memberMemory[k]);
+      return message.reply('✅ Mémoire de tous les membres effacée !');
+    }
+
+    if (message.content === '!reloadconfig') {
+      await loadConfig();
+      return message.reply('✅ Config rechargée depuis JSONbin !');
+    }
+
+    if (message.content === '!test') {
+      return message.reply('✅ Le bot fonctionne correctement ! 🫡');
+    }
+  }
+
+  // ── Mention → ouvrir session ──
+  if (isMentioned) {
+    startSession(channelId);
+    const userMsg = message.content.replace(/<@!?\d+>/g, '').trim();
+    if (!userMsg) return message.reply('Hey ! 👋 T\'as besoin de moi ?');
+    const reply = await getAIResponse(message.author.id, userMsg, channelId);
+    return message.reply(reply);
+  }
+
+  // ── Session active → analyser si adressé au bot ──
+  if (activeSessions[channelId] !== undefined) {
+    const addressed = await isAddressedToBot(message);
+    if (addressed) {
+      resetSessionTimer(channelId);
+      const reply = await getAIResponse(message.author.id, message.content, channelId);
+      return message.reply(reply);
+    } else {
+      incrementSession(channelId);
+    }
   }
 });
 
-// 🤖 Bot prêt + statut en ligne
-client.once('ready', () => {
-  console.log(`Connecté en tant que ${client.user.tag}`);
-  client.user.setPresence({
-    activities: [{ name: '👋 Bienvenue !', type: ActivityType.Watching }],
-    status: 'online'
-  });
-});
-
-// 🔑 Connexion
+// ─── Connexion ─────────────────────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN);
