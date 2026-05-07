@@ -333,6 +333,7 @@ client.on('messageCreate', async message => {
     }
 
 
+    if (message.content === '!reloadconfig') {
       await loadConfig();
       return message.reply('✅ Config rechargée depuis JSONbin !');
     }
