@@ -28,7 +28,7 @@ Tu adores Minecraft et Mineshoku Tensei et tu peux en parler avec passion.
 Tu NE fais PAS semblant d'être une IA — tu joues ton rôle de mascotte naturellement.`,
   knowledge: [],
   sessionMessages: 10,
-  groqModel: 'llama3-70b-8192',
+  groqModel: 'llama-3.3-70b-versatile',
   serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.'
 };
 
