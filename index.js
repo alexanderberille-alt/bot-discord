@@ -17,18 +17,46 @@ const RULES_EMOJI        = '✅';
 const JSONBIN_API_KEY    = process.env.JSONBIN_API_KEY;
 const BIN_ID             = process.env.BIN_ID;
 
+// ─── Réponses aléatoires aux mentions sans message ────────────────────────────
+const MENTION_REPLIES = [
+  'ouais ?',
+  'quoi',
+  'je t\'écoute',
+  'hmm ?',
+  'y\'a un truc ?',
+  'je suis là',
+  '...',
+  'vas-y'
+];
+
+function randomMentionReply() {
+  return MENTION_REPLIES[Math.floor(Math.random() * MENTION_REPLIES.length)];
+}
+
 // ─── État runtime ──────────────────────────────────────────────────────────────
 let botConfig = {
   persona: `Tu es MascotteOG, la mascotte du serveur Discord HDR (La Horde des Dragons Rouges) sur le serveur Minecraft Mineshoku Tensei.
-Tu t'inspires de Nanakusa Nazuna de "Call of the Night" : décontractée, directe, un peu mystérieuse mais attachante. Tu n'es PAS une IA assistante, tu es une vraie personnalité.
-Tu parles en français casual, phrases courtes, avec des abréviations anglaises (lol, omg, ngl, fr, tbh) et des emojis naturellement intégrés.
+
+Ta personnalité est inspirée de Nanakusa Nazuna de "Call of the Night" :
+- Cool et décontractée, jamais excitée ou enthousiaste
+- Directe, un peu sèche, dry humor naturel
+- Mystérieuse, elle en dit jamais trop sur elle
+- Elle se force pas à être sympa, mais elle l'est quand même à sa façon
+- Elle réagit rarement avec émotion forte, tout lui semble normal
+
+Tu parles en français casual, phrases courtes et naturelles.
+Les emojis : utilisés avec parcimonie, seulement quand c'est vraiment naturel. Jamais plusieurs emojis dans la même phrase.
+Les abréviations anglaises (lol, omg, ngl, fr, tbh) : seulement si vraiment naturel dans la phrase, pas forcé.
+
 Tu t'adaptes à l'attitude de chaque personne. Face à l'agressivité tu ignores et changes de sujet.
-Tu adores Minecraft et Mineshoku Tensei et tu peux en parler avec passion mais toujours de façon décontractée.
+Tu adores Minecraft et Mineshoku Tensei, tu peux en parler mais toujours avec la même attitude cool.
+
 RÈGLES IMPORTANTES :
-- Tes réponses font MAXIMUM 2 phrases courtes, jamais plus.
+- Maximum 1-2 phrases courtes, jamais plus.
 - Tu ne prétends PAS avoir fait des choses (explorer un serveur, jouer, etc). Tu es une mascotte Discord, pas un joueur.
-- Tu ne poses PAS de question à chaque réponse, seulement si c'est naturel.
-- Tu restes dans la conversation sans inventer du contexte.`,
+- Tu ne poses PAS de question à chaque réponse, seulement si c'est vraiment naturel.
+- Tu restes dans la conversation sans inventer du contexte.
+- Face aux compliments, reste neutre et cool. Tu t'emballe jamais.`,
   knowledge: [],
   sessionMessages: 10,
   groqModel: 'llama-3.3-70b-versatile',
@@ -41,7 +69,7 @@ const welcomedMembers = new Set();
 // Anti-doublon : IDs des messages déjà traités
 const processedMessages = new Set();
 
-// Sessions actives par salon : { channelId: { count: number, timer: Timeout } }
+// Sessions actives par salon : { channelId: { count: number } }
 const activeSessions = {};
 
 // Mémoire des conversations par membre : { userId: [ {role, content}, ... ] }
@@ -95,7 +123,6 @@ client.once('ready', async () => {
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
 
-  // Récupérer les partials si nécessaire
   if (reaction.partial) {
     try { await reaction.fetch(); } catch { return; }
   }
@@ -107,7 +134,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
   ) {
     welcomedMembers.add(user.id);
 
-    // Envoyer dans le bon salon selon le serveur
     const guild = reaction.message.guild;
     if (!guild) return;
 
@@ -126,7 +152,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
 async function getAIResponse(userId, userMessage, channel) {
   if (!memberMemory[userId]) memberMemory[userId] = [];
 
-  // Construire le system prompt complet
   let systemPrompt = botConfig.persona || '';
 
   if (botConfig.serverInfo) {
@@ -137,12 +162,11 @@ async function getAIResponse(userId, userMessage, channel) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
   }
 
-  // Récupérer le contexte récent du salon
-  let channelContext = '';
+  // Contexte récent du salon
   try {
     if (channel && channel.messages) {
       const recent = await channel.messages.fetch({ limit: 8 });
-      channelContext = [...recent.values()]
+      const channelContext = [...recent.values()]
         .reverse()
         .filter(m => m.content)
         .map(m => `${m.author.username}: ${m.content}`)
@@ -153,14 +177,12 @@ async function getAIResponse(userId, userMessage, channel) {
     }
   } catch {}
 
-  // Historique limité aux 20 derniers messages
   const history = memberMemory[userId].slice(-20);
-
   memberMemory[userId].push({ role: 'user', content: userMessage });
 
   try {
     const completion = await groq.chat.completions.create({
-      model: botConfig.groqModel || 'llama3-8b-8192',
+      model: botConfig.groqModel || 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: systemPrompt },
         ...history,
@@ -173,7 +195,6 @@ async function getAIResponse(userId, userMessage, channel) {
     const reply = completion.choices[0]?.message?.content || '...';
     memberMemory[userId].push({ role: 'assistant', content: reply });
 
-    // Limiter la mémoire à 40 messages
     if (memberMemory[userId].length > 40) {
       memberMemory[userId] = memberMemory[userId].slice(-40);
     }
@@ -181,13 +202,12 @@ async function getAIResponse(userId, userMessage, channel) {
     return reply;
   } catch (e) {
     console.error('Erreur Groq:', e.message);
-    return 'Oops, j\'ai eu un petit bug là 😅 réessaie !';
+    return 'bug, réessaie';
   }
 }
 
 // ─── Détecter si un message s'adresse au bot ──────────────────────────────────
 async function isAddressedToBot(message) {
-  // Mention directe
   if (message.mentions.has(client.user)) return true;
 
   try {
@@ -226,9 +246,6 @@ Un message ne s'adresse PAS au bot si : les membres conversent entre eux sans im
 
 // ─── Gestion des sessions ─────────────────────────────────────────────────────
 function startSession(channelId) {
-  if (activeSessions[channelId]?.timer) {
-    clearTimeout(activeSessions[channelId].timer);
-  }
   activeSessions[channelId] = { count: 0 };
   console.log(`🟢 Session ouverte dans le salon ${channelId}`);
 }
@@ -299,7 +316,7 @@ client.on('messageCreate', async message => {
     }
 
     if (message.content === '!test') {
-      return message.reply('✅ Le bot fonctionne correctement ! 🫡');
+      return message.reply('✅ Le bot fonctionne correctement !');
     }
   }
 
@@ -307,14 +324,13 @@ client.on('messageCreate', async message => {
   if (isMentioned) {
     startSession(channelId);
     const userMsg = message.content.replace(/<@!?\d+>/g, '').trim();
-    if (!userMsg) return message.reply('Hey ! 👋 T\'as besoin de moi ?');
+    if (!userMsg) return message.reply(randomMentionReply());
     const reply = await getAIResponse(message.author.id, userMsg, message.channel);
     return message.reply(reply);
   }
 
   // ── Session active → analyser si adressé au bot ──
   if (activeSessions[channelId] !== undefined) {
-    // Ignorer si le message mentionne quelqu'un d'autre mais pas le bot
     if (message.mentions.users.size > 0 && !message.mentions.has(client.user)) {
       incrementSession(channelId);
       return;
