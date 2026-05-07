@@ -123,7 +123,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 // ─── Réponse IA ────────────────────────────────────────────────────────────────
-async function getAIResponse(userId, userMessage, channelContext) {
+async function getAIResponse(userId, userMessage, channel) {
   if (!memberMemory[userId]) memberMemory[userId] = [];
 
   // Construire le system prompt complet
@@ -136,6 +136,22 @@ async function getAIResponse(userId, userMessage, channelContext) {
   if (botConfig.knowledge && botConfig.knowledge.length > 0) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
   }
+
+  // Récupérer le contexte récent du salon
+  let channelContext = '';
+  try {
+    if (channel && channel.messages) {
+      const recent = await channel.messages.fetch({ limit: 8 });
+      channelContext = [...recent.values()]
+        .reverse()
+        .filter(m => m.content)
+        .map(m => `${m.author.username}: ${m.content}`)
+        .join('\n');
+      if (channelContext) {
+        systemPrompt += `\n\n--- Contexte récent du salon ---\n${channelContext}`;
+      }
+    }
+  } catch {}
 
   // Historique limité aux 20 derniers messages
   const history = memberMemory[userId].slice(-20);
@@ -292,7 +308,7 @@ client.on('messageCreate', async message => {
     startSession(channelId);
     const userMsg = message.content.replace(/<@!?\d+>/g, '').trim();
     if (!userMsg) return message.reply('Hey ! 👋 T\'as besoin de moi ?');
-    const reply = await getAIResponse(message.author.id, userMsg, channelId);
+    const reply = await getAIResponse(message.author.id, userMsg, message.channel);
     return message.reply(reply);
   }
 
@@ -306,7 +322,7 @@ client.on('messageCreate', async message => {
     const addressed = await isAddressedToBot(message);
     if (addressed) {
       resetSessionTimer(channelId);
-      const reply = await getAIResponse(message.author.id, message.content, channelId);
+      const reply = await getAIResponse(message.author.id, message.content, message.channel);
       return message.reply(reply);
     } else {
       incrementSession(channelId);
