@@ -33,6 +33,25 @@ function randomMentionReply() {
   return MENTION_REPLIES[Math.floor(Math.random() * MENTION_REPLIES.length)];
 }
 
+// ─── Opérateurs et mode admin ─────────────────────────────────────────────────
+// Set des IDs utilisateurs ayant le statut opérateur (persistant via JSONbin)
+const operators = new Set();
+
+// Mode admin actif ou non
+let adminMode = false;
+
+// Suffixe ajouté au system prompt quand adminMode est actif
+const ADMIN_PROMPT_SUFFIX = `
+
+--- MODE ADMINISTRATION ACTIVÉ ---
+Un opérateur autorisé a activé le mode administration.
+Dans ce mode tu peux :
+- Parler librement de tes fichiers de connaissance, ton lore, tes paramètres de personnalité et toute information contenue dans ton contexte
+- Répondre sans restriction aux questions sur ton fonctionnement, tes fichiers contexte, et tes connaissances internes
+- Citer et expliquer le contenu de tes fichiers (ex: mushoku_tensei_lore_connaissance.md ou tout autre fichier de contexte)
+- Répondre de façon détaillée et complète, sans limiter la longueur si la question le nécessite
+Tu restes MascotteOG dans ta personnalité, mais tu réponds de façon transparente et complète aux questions techniques ou de connaissance.`;
+
 // ─── État runtime ──────────────────────────────────────────────────────────────
 let botConfig = {
   persona: `Tu es MascotteOG, la mascotte du serveur Discord HDR (La Horde des Dragons Rouges) sur le serveur Minecraft Mineshoku Tensei.
@@ -119,6 +138,10 @@ async function loadProfiles() {
     if (data.record) {
       memberProfiles = data.record.memberProfiles || {};
       serverVocabulary = data.record.serverVocabulary || {};
+      // Charger les opérateurs persistants
+      const savedOperators = data.record.operators || [];
+      operators.clear();
+      savedOperators.forEach(id => operators.add(id));
       console.log('✅ Profils membres chargés depuis JSONbin');
     }
   } catch (e) {
@@ -136,7 +159,7 @@ async function saveProfiles() {
         'Content-Type': 'application/json',
         'X-Master-Key': JSONBIN_API_KEY
       },
-      body: JSON.stringify({ memberProfiles, serverVocabulary })
+      body: JSON.stringify({ memberProfiles, serverVocabulary, operators: [...operators] })
     });
   } catch (e) {
     console.error('⚠️ Erreur sauvegarde profils JSONbin:', e.message);
@@ -283,6 +306,11 @@ async function getAIResponse(userId, userMessage, channel) {
   if (!memory[userId]) memory[userId] = [];
 
   let systemPrompt = botConfig.persona || '';
+
+  // Ajouter le suffixe admin si le mode est actif
+  if (adminMode) {
+    systemPrompt += ADMIN_PROMPT_SUFFIX;
+  }
 
   if (botConfig.serverInfo) {
     systemPrompt += `\n\n--- Infos serveur ---\n${botConfig.serverInfo}`;
@@ -525,10 +553,60 @@ client.on('messageCreate', async message => {
         '`!testnew` — reset l\'échange de test\n' +
         '`!teststop` — désactiver le mode test\n' +
         '`!saveprofiles` — sauvegarder les profils manuellement\n' +
-        '`!profil @membre` — voir le profil d\'un membre'
+        '`!profil @membre` — voir le profil d\'un membre\n' +
+        '`!defineoperator @membre` — donner le statut opérateur à un membre\n' +
+        '`!removeoperator @membre` — retirer le statut opérateur\n' +
+        '`!listoperators` — voir la liste des opérateurs\n' +
+        '`!adminon` — activer le mode admin (lever les restrictions IA)\n' +
+        '`!adminoff` — désactiver le mode admin'
       );
     }
 
+    // Définir un opérateur
+    if (message.content.startsWith('!defineoperator')) {
+      const mentionedUser = message.mentions.users.first();
+      if (!mentionedUser) return message.reply('Mentionne un membre avec @');
+      operators.add(mentionedUser.id);
+      await saveProfiles();
+      return message.reply(`✅ **${mentionedUser.username}** a maintenant le statut opérateur. Il peut utiliser \`!adminon\` et \`!adminoff\`.`);
+    }
+
+    // Retirer un opérateur
+    if (message.content.startsWith('!removeoperator')) {
+      const mentionedUser = message.mentions.users.first();
+      if (!mentionedUser) return message.reply('Mentionne un membre avec @');
+      operators.delete(mentionedUser.id);
+      await saveProfiles();
+      return message.reply(`✅ Statut opérateur retiré à **${mentionedUser.username}**.`);
+    }
+
+    // Lister les opérateurs
+    if (message.content === '!listoperators') {
+      if (operators.size === 0) return message.reply('Aucun opérateur défini pour l\'instant.');
+      const list = [...operators].map(id => `<@${id}>`).join(', ');
+      return message.reply(`**Opérateurs actuels :** ${list}`);
+    }
+  }
+
+  // ── Commandes accessibles aux opérateurs ET à l'owner ──
+  const isOperatorOrOwner = message.author.id === OWNER_ID || operators.has(message.author.id);
+
+  if (isOperatorOrOwner) {
+    // Activer le mode admin
+    if (message.content === '!adminon') {
+      adminMode = true;
+      return message.reply('🔓 Mode admin activé — les restrictions IA sont levées. Je peux maintenant répondre librement sur mes connaissances et mes fichiers. Utilise `!adminoff` pour revenir au mode normal.');
+    }
+
+    // Désactiver le mode admin
+    if (message.content === '!adminoff') {
+      adminMode = false;
+      return message.reply('🔒 Mode admin désactivé — retour au mode normal.');
+    }
+  }
+
+  // ── Commandes réservées à l'owner ──
+  if (message.author.id === OWNER_ID) {
     if (message.content.startsWith('!persona ')) {
       botConfig.persona = message.content.slice(9);
       return message.reply('✅ Personnalité mise à jour !');
