@@ -81,7 +81,9 @@ RÈGLES IMPORTANTES :
   knowledge: [],
   sessionMessages: 10,
   groqModel: 'llama-3.3-70b-versatile',
-  serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.'
+  serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.',
+  contextFiles: []
+};
 };
 
 // ─── Profils membres ───────────────────────────────────────────────────────────
@@ -318,6 +320,12 @@ async function getAIResponse(userId, userMessage, channel) {
 
   if (botConfig.knowledge && botConfig.knowledge.length > 0) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
+  }
+  if (botConfig.contextFiles && botConfig.contextFiles.length > 0) {
+    const filesBlock = botConfig.contextFiles.map(f =>
+      `\n\n--- FICHIER DE RÉFÉRENCE : ${f.name}${f.desc ? ` (${f.desc})` : ''} ---\n${f.content}\n---`
+    ).join('');
+    systemPrompt += filesBlock;
   }
 
   // Contexte personnalité basé sur le profil du membre (hors mode test)
