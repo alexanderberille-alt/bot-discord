@@ -185,30 +185,36 @@ function addIncident(userId, description) {
 
 // ─── Analyse vocabulaire ───────────────────────────────────────────────────────
 function analyzeVocabulary(userId, text) {
-  // Mots à ignorer (stop words)
   const stopWords = new Set([
     'le','la','les','un','une','des','de','du','et','en','au','aux',
     'je','tu','il','elle','on','nous','vous','ils','elles','me','te','se',
     'que','qui','quoi','dont','où','ce','cette','ces','mon','ton','son',
     'ma','ta','sa','nos','vos','leurs','lui','leur','y','ne','pas','plus',
-    'est','sont','a','ont','être','avoir','je','c','j','l','d','s','n','m',
+    'est','sont','ont','être','avoir','c','j','l','d','s','n','m',
     'si','mais','ou','donc','or','ni','car','pour','sur','sous','dans',
-    'avec','sans','par','entre','vers','chez','the','is','it','in','on','at',
-    'to','a','an','that','this','i','you','he','she','we','they'
+    'avec','sans','par','entre','vers','chez','the','is','it','in','on',
+    'oui','non','ouais','ouai','nan','bah','bon','ben','bien','très','aussi',
+    'comme','même','tout','rien','quelque','chaque','autre','avec','encore',
+    'just','this','that','the','and','for','merci','salut','bonjour','bonsoir',
+    'okay','test','incident','mode','petit','petite','question','mauvais',
+    'tranquille','pourrais','considere','dire','avais','soit','comme'
   ]);
 
   const words = text.toLowerCase()
     .replace(/[^a-zàâäéèêëîïôùûüç0-9\s']/g, ' ')
     .split(/\s+/)
-    .filter(w => w.length >= 3 && !stopWords.has(w));
+    .filter(w => w.length >= 4 && !stopWords.has(w));
 
   const profile = getOrCreateProfile(userId);
 
   words.forEach(word => {
-    // Vocabulaire du membre
     profile.vocabulary[word] = (profile.vocabulary[word] || 0) + 1;
-    // Vocabulaire global serveur
     serverVocabulary[word] = (serverVocabulary[word] || 0) + 1;
+  });
+
+  // Ne garder que les mots utilisés au moins 3 fois (vrais mots signature)
+  Object.keys(profile.vocabulary).forEach(word => {
+    if (profile.vocabulary[word] < 3) delete profile.vocabulary[word];
   });
 
   // Nettoyer vocabulaire du membre (garder top 100)
