@@ -84,7 +84,6 @@ RÈGLES IMPORTANTES :
   serverInfo: 'HDR (La Horde des Dragons Rouges) est une guilde sur le serveur Minecraft Mineshoku Tensei.',
   contextFiles: []
 };
-};
 
 // ─── Profils membres ───────────────────────────────────────────────────────────
 // Structure : { userId: { username, friendshipLevel, incidents: [], vocabulary: { words: {}, lastUpdated } } }
