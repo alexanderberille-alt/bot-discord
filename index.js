@@ -351,15 +351,15 @@ if (!words.length) return '';
     }
     return { chunk, score };
   }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, maxChunks);
-  console.log(`🎯 Chunks trouvés: ${scored.length}`);
-  console.log(`📄 Contenu injecté: ${result.substring(0, 200)}`);
-  let result = '';
-  for (const { chunk } of scored) {
-    const block = `\n\n--- ${chunk.fileName} › ${chunk.title} ---\n${chunk.content.trim()}\n`;
-    if (result.length + block.length > maxChars) break;
-    result += block;
-  }
-  return result;
+ console.log(`🎯 Chunks trouvés: ${scored.length}`);
+let result = '';
+for (const { chunk } of scored) {
+  const block = `\n\n--- ${chunk.fileName} › ${chunk.title} ---\n${chunk.content.trim()}\n`;
+  if (result.length + block.length > maxChars) break;
+  result += block;
+}
+console.log(`📄 Contenu injecté: ${result.substring(0, 200)}`);
+return result;
 }
 
 // ─── Réponse IA ────────────────────────────────────────────────────────────────
