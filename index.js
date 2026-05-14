@@ -121,6 +121,7 @@ async function loadConfig() {
     const data = await res.json();
     if (data.record) {
       botConfig = { ...botConfig, ...data.record };
+      buildRAGIndex(); // ← ajouter
       console.log('✅ Config chargée depuis JSONbin');
     }
   } catch (e) {
@@ -301,6 +302,62 @@ function buildVocabularyContext() {
   return `\n\n--- Vocabulaire courant du serveur ---\nCes mots/expressions sont souvent utilisés sur le serveur : ${topWords.join(', ')}. Intègre-les naturellement quand c'est pertinent.\n`;
 }
 
+// ─── RAG ──────────────────────────────────────────────────────────────────────
+let ragIndex = [];
+
+function extractKeywords(text) {
+  const stop = new Set(['les','des','une','dans','avec','pour','sur','par','son','ses','leur','leurs','qui','que','dont','est','sont','ont','plus','très','bien','aussi','comme','mais']);
+  return text.toLowerCase().replace(/[^a-zàâäéèêëîïôùûüç\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !stop.has(w));
+}
+
+function chunkMarkdownFile(file) {
+  const lines = file.content.split('\n');
+  const chunks = [];
+  let currentChunk = null;
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      if (currentChunk) chunks.push(currentChunk);
+      currentChunk = { fileName: file.name, title: line.replace('## ', '').trim(), keywords: extractKeywords(line.replace('## ', '').trim()), content: line + '\n' };
+    } else if (currentChunk) {
+      currentChunk.content += line + '\n';
+      if (line.startsWith('### ')) currentChunk.keywords.push(...extractKeywords(line.replace('### ', '').trim()));
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+  return chunks;
+}
+
+function buildRAGIndex() {
+  ragIndex = [];
+  if (!botConfig.contextFiles?.length) return;
+  for (const file of botConfig.contextFiles) {
+    if (file.content) ragIndex.push(...chunkMarkdownFile(file));
+  }
+  console.log(`📚 RAG : ${ragIndex.length} sections indexées`);
+}
+
+function retrieveRelevantChunks(userMessage, maxChunks = 3, maxChars = 3000) {
+  if (!ragIndex.length) return '';
+  const words = extractKeywords(userMessage);
+  if (!words.length) return '';
+  const scored = ragIndex.map(chunk => {
+    let score = 0;
+    for (const w of words) {
+      if (chunk.keywords.includes(w)) score += 3;
+      if (chunk.title.toLowerCase().includes(w)) score += 2;
+      if (chunk.content.toLowerCase().includes(w)) score += 1;
+    }
+    return { chunk, score };
+  }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, maxChunks);
+  let result = '';
+  for (const { chunk } of scored) {
+    const block = `\n\n--- ${chunk.fileName} › ${chunk.title} ---\n${chunk.content.trim()}\n`;
+    if (result.length + block.length > maxChars) break;
+    result += block;
+  }
+  return result;
+}
+
 // ─── Réponse IA ────────────────────────────────────────────────────────────────
 async function getAIResponse(userId, userMessage, channel) {
   const memory = testMode ? testMemory : memberMemory;
@@ -320,12 +377,11 @@ async function getAIResponse(userId, userMessage, channel) {
   if (botConfig.knowledge && botConfig.knowledge.length > 0) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
   }
-  if (botConfig.contextFiles && botConfig.contextFiles.length > 0) {
-    const filesBlock = botConfig.contextFiles.map(f =>
-      `\n\n--- FICHIER DE RÉFÉRENCE : ${f.name}${f.desc ? ` (${f.desc})` : ''} ---\n${f.content}\n---`
-    ).join('');
-    systemPrompt += filesBlock;
-  }
+
+  const ragContext = retrieveRelevantChunks(userMessage);
+  if (ragContext) {
+  systemPrompt += `\n\n--- Extraits pertinents ---${ragContext}`;
+}
 
   // Contexte personnalité basé sur le profil du membre (hors mode test)
   if (!testMode) {
@@ -487,6 +543,7 @@ const client = new Client({
 client.once('ready', async () => {
   console.log(`Connecté en tant que ${client.user.tag}`);
   await loadConfig();
+  buildRAGIndex(); // ← ajouter
   await loadProfiles();
   client.user.setPresence({
     activities: [{ name: '🐉 HDR — Mineshoku Tensei', type: ActivityType.Watching }],
