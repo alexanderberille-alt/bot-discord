@@ -351,6 +351,7 @@ if (!words.length) return '';
     }
     return { chunk, score };
   }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, maxChunks);
+  console.log(`🎯 Chunks trouvés: ${scored.length}`);
   let result = '';
   for (const { chunk } of scored) {
     const block = `\n\n--- ${chunk.fileName} › ${chunk.title} ---\n${chunk.content.trim()}\n`;
