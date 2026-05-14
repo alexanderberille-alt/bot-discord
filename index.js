@@ -336,10 +336,11 @@ function buildRAGIndex() {
   console.log(`📚 RAG : ${ragIndex.length} sections indexées`);
 }
 
-function retrieveRelevantChunks(userMessage, maxChunks = 3, maxChars = 3000) {
+function retrieveRelevantChunks(userMessage, maxChunks = 1, maxChars = 800) {
   if (!ragIndex.length) return '';
-  const words = extractKeywords(userMessage);
-  if (!words.length) return '';
+if (!userMessage.toLowerCase().includes('help')) return '';
+const words = extractKeywords(userMessage);
+if (!words.length) return '';
   const scored = ragIndex.map(chunk => {
     let score = 0;
     for (const w of words) {
@@ -442,7 +443,7 @@ async function getAIResponse(userId, userMessage, channel) {
 async function detectAndUpdateRelation(userId, message) {
   try {
     const check = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages: [
         {
           role: 'system',
@@ -465,66 +466,6 @@ async function detectAndUpdateRelation(userId, message) {
       adjustFriendship(userId, 0.5);
     }
   } catch {}
-}
-
-// ─── Détecter si un message s'adresse au bot ──────────────────────────────────
-async function isAddressedToBot(message) {
-  if (message.mentions.has(client.user)) return true;
-
-  try {
-    const recent = await message.channel.messages.fetch({ limit: 5 });
-    const context = [...recent.values()]
-      .reverse()
-      .map(m => `${m.author.username}: ${m.content}`)
-      .join('\n');
-
-    const check = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `Tu analyses si un message Discord s'adresse à MascotteOG (un bot Discord). Réponds UNIQUEMENT par "oui" ou "non", rien d'autre.
-Un message s'adresse au bot si : il lui pose une question directement, lui répond, ou s'adresse clairement à elle.
-Un message ne s'adresse PAS au bot si : les membres conversent entre eux sans impliquer le bot.`
-        },
-        {
-          role: 'user',
-          content: `Contexte récent:\n${context}\n\nDernier message de ${message.author.username}: "${message.content}"\n\nCe message s'adresse-t-il à MascotteOG ?`
-        }
-      ],
-      max_tokens: 5,
-      temperature: 0.1
-    });
-
-    const answer = check.choices[0]?.message?.content?.toLowerCase().trim();
-    console.log(`🔍 Analyse message "${message.content}" → ${answer}`);
-    return answer === 'oui';
-  } catch (e) {
-    console.error('Erreur détection:', e.message);
-    return false;
-  }
-}
-
-// ─── Gestion des sessions ─────────────────────────────────────────────────────
-function startSession(channelId) {
-  activeSessions[channelId] = { count: 0 };
-  console.log(`🟢 Session ouverte dans le salon ${channelId}`);
-}
-
-function resetSessionTimer(channelId) {
-  if (activeSessions[channelId]) {
-    activeSessions[channelId].count = 0;
-  }
-}
-
-function incrementSession(channelId) {
-  if (!activeSessions[channelId]) return;
-  activeSessions[channelId].count++;
-  const limit = botConfig.sessionMessages || 10;
-  if (activeSessions[channelId].count >= limit) {
-    delete activeSessions[channelId];
-    console.log(`🔴 Session fermée dans le salon ${channelId} (limite atteinte)`);
-  }
 }
 
 // ─── Client Discord ────────────────────────────────────────────────────────────
@@ -737,29 +678,12 @@ client.on('messageCreate', async message => {
     }
   }
 
-  // ── Mention → ouvrir session ──
+  // ── Mention → répondre ──
   if (isMentioned) {
-    startSession(channelId);
     const userMsg = message.content.replace(/<@!?\d+>/g, '').trim();
     if (!userMsg) return message.reply(randomMentionReply());
     const reply = await getAIResponse(userId, userMsg, message.channel);
     return message.reply(reply);
-  }
-
-  // ── Session active → analyser si adressé au bot ──
-  if (activeSessions[channelId] !== undefined) {
-    if (message.mentions.users.size > 0 && !message.mentions.has(client.user)) {
-      incrementSession(channelId);
-      return;
-    }
-    const addressed = await isAddressedToBot(message);
-    if (addressed) {
-      resetSessionTimer(channelId);
-      const reply = await getAIResponse(userId, message.content, message.channel);
-      return message.reply(reply);
-    } else {
-      incrementSession(channelId);
-    }
   }
 });
 
