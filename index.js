@@ -354,6 +354,7 @@ if (!words.length) return '';
 console.log(`🎯 Chunks trouvés: ${scored.length}`);
 let result = '';
 for (const { chunk } of scored) {
+  console.log(`📦 chunk title: ${chunk.title}, content length: ${chunk.content?.length}`);
   const block = `\n\n--- ${chunk.fileName} › ${chunk.title} ---\n${chunk.content.trim()}\n`;
   if (result.length + block.length > maxChars) break;
   result += block;
