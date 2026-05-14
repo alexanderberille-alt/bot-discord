@@ -382,7 +382,7 @@ async function getAIResponse(userId, userMessage, channel) {
     systemPrompt += `\n\n--- Connaissances ---\n${botConfig.knowledge.filter(Boolean).join('\n')}`;
   }
 
-  const ragContext = retrieveRelevantChunks(userMessage);
+  const ragContext = retrieveRelevantChunks(userMessage, 1, 2000);
   if (ragContext) {
   systemPrompt += `\n\n--- Extraits pertinents ---${ragContext}`;
 }
