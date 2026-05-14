@@ -339,6 +339,7 @@ function buildRAGIndex() {
 function retrieveRelevantChunks(userMessage, maxChunks = 1, maxChars = 800) {
   if (!ragIndex.length) return '';
 if (!userMessage.toLowerCase().includes('help')) return '';
+  console.log(`🔍 RAG actif - ragIndex: ${ragIndex.length} sections, message: "${userMessage}"`);
 const words = extractKeywords(userMessage);
 if (!words.length) return '';
   const scored = ragIndex.map(chunk => {
